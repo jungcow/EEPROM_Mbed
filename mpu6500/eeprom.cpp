@@ -33,7 +33,7 @@ int EEPROM::read_8(const int address) {
     int ack;
     int read_ack;
 
-    if (!check_EEPROM_mem_address(address)|| !this->ready())
+    if (!check_EEPROM_mem_address(address))
         return -1;
     // Prepare the command to set the EEPROM read address
     command[0] = (address >> 8) & 0xFF; // High byte of the address
@@ -65,7 +65,7 @@ int EEPROM::read_16(const int address) {
     int ack;
     int read_ack;
 
-    if (!check_EEPROM_mem_address(address + 1)|| !this->ready())
+    if (!check_EEPROM_mem_address(address + 1))
         return -1;
     command[0] = (address >> 8) & 0xFF; // High byte of the address
     command[1] = address & 0xFF;        // Low byte of the address
@@ -96,7 +96,7 @@ int EEPROM::write_8(const int address, char data) {
     char command[3];
     int ack;
 
-    if (!check_EEPROM_mem_address(address)|| !this->ready())
+    if (!check_EEPROM_mem_address(address))
         return -1;
     command[0] = (address >> 8) & 0xFF; // High byte of the address
     command[1] = address & 0xFF;        // Low byte of the address
@@ -130,7 +130,7 @@ int EEPROM::write_16(const int address, const int data) {
     char command[4];
     int ack =  0;
 
-    if (!check_EEPROM_mem_address(address)|| !this->ready())
+    if (!check_EEPROM_mem_address(address))
         return -1;
 
     // Prepare the command to write data: address (big-endian) + data (little-endian).
@@ -180,17 +180,17 @@ int EEPROM::init(void) {
  * 
  * @return true if the EEPROM is ready for communication, false otherwise.
  */
-bool EEPROM::ready(void) {
-    char command[2];
+// bool EEPROM::ready(void) {
+//     char command[2];
 
-    command[0] = 0;
-    command[1] = 0;
-    int ack = !this->i2c_port.write(this->EEPROM_8BIT_ADDR, command, 2);
-    if (ack) {
-        this->errnum = NOT_READY_YET;
-    }
-    return ack;
-}
+//     command[0] = 0;
+//     command[1] = 0;
+//     int ack = !this->i2c_port.write(this->EEPROM_8BIT_ADDR, command, 2);
+//     if (ack) {
+//         this->errnum = NOT_READY_YET;
+//     }
+//     return ack;
+// }
 
 /**
  * @brief Verifies that the specified memory address is within the valid range of the EEPROM.
@@ -240,7 +240,9 @@ int EEPROM::read_block_data(const int address, char *received_buffer, const int 
     int ack;
     int read_ack;
 
-    if (!check_EEPROM_mem_address(address + size - 1) || !this->ready())
+    if (size > 128 
+            || size <= 0 
+            || !check_EEPROM_mem_address(address + size - 1))
         return -1;
     
     command[0] = (address >> 8) & 0xFF; // High byte of the address
@@ -249,9 +251,6 @@ int EEPROM::read_block_data(const int address, char *received_buffer, const int 
     read_ack = this->i2c_port.read(this->EEPROM_8BIT_ADDR, (char *)received_buffer, size);
     if (ack || read_ack) {
         this->errnum = this->NACK;
-        #if DEBUG
-            printf("[%s] ack: %d, read_ack: %d\r\n", __FUNCTION__, ack, read_ack);
-        #endif
         return -1;
     }
     return (size);
@@ -332,14 +331,10 @@ int EEPROM::save_to_eeprom(Serial& pc, int32_t pressure, float roll, float pitch
         return -1; // Return an error if there's not enough space left.
     }
 
-    if (!this->ready() || this->tictoc.read_ms() < 10) {
+    if (this->tictoc.read_us() < 9000) {
         return -1;
     }
     this->tictoc.reset();
-
-    // Split the 32-bit pressure value into two 16-bit parts.
-    int16_t pressure_high_order = (pressure >> 16) & 0x0000FFFF;
-    int16_t pressure_low_order = pressure & 0x0000FFFF;
 
     // Convert floating-point values to 16-bit integers by scaling.
     int16_t roll_u16 = static_cast<int16_t>(roll * 100);
@@ -347,12 +342,17 @@ int EEPROM::save_to_eeprom(Serial& pc, int32_t pressure, float roll, float pitch
     int16_t yaw_u16 = static_cast<int16_t>(yaw * 100);
 
     // Use a union to easily convert the array of 16-bit words to an array of bytes.
-    EEPROM::WordToByte wtb;
-    wtb.word_array[0] = pressure_high_order;
-    wtb.word_array[1] = pressure_low_order;
-    wtb.word_array[2] = roll_u16;
-    wtb.word_array[3] = pitch_u16;
-    wtb.word_array[4] = yaw_u16;
+    char data_array[10] = {0, };
+    data_array[0] = (pressure >> 24) & 0xFF;
+    data_array[1] = (pressure >> 16) & 0xFF;
+    data_array[2] = (pressure >> 8) & 0xFF;
+    data_array[3] = pressure & 0xFF;
+    data_array[4] = (roll_u16 >> 8) & 0xFF;
+    data_array[5] = roll_u16 & 0xFF;
+    data_array[6] = (pitch_u16 >> 8) & 0xFF;
+    data_array[7] = pitch_u16 & 0xFF;
+    data_array[8] = (yaw_u16 >> 8) & 0xFF;
+    data_array[9] = yaw_u16 & 0xFF;
 
     // page write limitation
     const int PAGE_SIZE = 128;
@@ -360,15 +360,13 @@ int EEPROM::save_to_eeprom(Serial& pc, int32_t pressure, float roll, float pitch
     int write_size;
 
     if ((this->eeprom_memory_addr / PAGE_SIZE) != ((this->eeprom_memory_addr + DATA_SIZE - 1) / PAGE_SIZE)) {
-        // pc.printf("================================================\r\n");
-        // pc.printf("[ Over Page Detect! ]\r\n");
-        // over page boundary
+        // detect page boundary -> need to handle.
         int first_data_size = PAGE_SIZE - (this->eeprom_memory_addr % PAGE_SIZE);
         int remain_size = DATA_SIZE - first_data_size;
         int first_ret = 0, second_ret = 0;
         first_ret = this->write_block_data(
                         this->eeprom_memory_addr,
-                        wtb.byte_array,
+                        data_array,
                         first_data_size);
 
         int boundary = (this->eeprom_memory_addr / PAGE_SIZE + 1) * PAGE_SIZE;
@@ -377,7 +375,7 @@ int EEPROM::save_to_eeprom(Serial& pc, int32_t pressure, float roll, float pitch
             // max time of write cycle is 5ms
             while ((second_ret = this->write_block_data(
                                             boundary,
-                                            wtb.byte_array + first_data_size,
+                                            data_array + first_data_size,
                                             remain_size)) < 0 
                 && loop_count++ <= 50) {
                 wait_us(100);
@@ -387,30 +385,11 @@ int EEPROM::save_to_eeprom(Serial& pc, int32_t pressure, float roll, float pitch
             write_size = first_ret;
         else
             write_size = first_ret + second_ret;
-        // pc.printf("start address: %6X\r\n", this->eeprom_memory_addr);
-        // pc.printf("end address: %6X\r\n\r\n", this->eeprom_memory_addr + DATA_SIZE - 1);
-
-        // pc.printf("current page: %3d\r\n", this->eeprom_memory_addr / PAGE_SIZE);
-        // pc.printf("current page write start address: %6X\r\n", this->eeprom_memory_addr);
-        // pc.printf("current page write byte size: %3d\r\n\r\n", first_data_size);
-
-        // pc.printf("next page: %3d\r\n", (this->eeprom_memory_addr + DATA_SIZE - 1) / PAGE_SIZE);
-        // pc.printf("next page write address: %6X\r\n", boundary);
-        // pc.printf("next page write byte size: %3d\r\n", remain_size);
-        // pc.printf("================================================\r\n");
     } else {
-        write_size = this->write_block_data(this->eeprom_memory_addr, wtb.byte_array, 10);
+        write_size = this->write_block_data(this->eeprom_memory_addr,data_array, 10);
     }
-    
-
-    pc.printf("Addr: %05d, pressure: (%5d, %5d), roll_16: %5d, pitch_16: %5d, yaw_16: %5d [ %2d ]\r\n", eeprom_memory_addr, pressure_high_order, pressure_low_order, roll_u16, pitch_u16, yaw_u16, write_size);
-
 
     // Increment the EEPROM memory address for the next write operation.
     this->eeprom_memory_addr += 10;
-
-    // LED blink function to indicate write operation
-    // EEPROM_led_blink(1,10);
-
     return 0; // Return 0 to indicate successful operation.
 }

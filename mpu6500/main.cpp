@@ -703,6 +703,7 @@ void EEPROM_led_blink(int count, int interval_ms)
 
 #include "eeprom.h"
 
+
  /**
  * @brief Saves sensor data including pressure, roll, pitch, and yaw to EEPROM.
  * 
@@ -717,20 +718,30 @@ void EEPROM_led_blink(int count, int interval_ms)
  * |---------------|---------------|----------|----------|----------|
  * | Pressure High | Pressure Low  | Roll     | Pitch    | Yaw      |
  * 
- * @param eeprom Reference to the EEPROM object for interfacing with the EEPROM hardware.
  * @param pressure 32-bit integer representing the pressure to be saved.
  * @param roll Floating-point representing the roll angle to be saved, scaled and stored as a 16-bit integer.
  * @param pitch Floating-point representing the pitch angle to be saved, scaled and stored as a 16-bit integer.
  * @param yaw Floating-point representing the yaw angle to be saved, scaled and stored as a 16-bit integer.
  * @return int Returns 0 on successful operation, 1 if the next write operation exceeds EEPROM's storage capacity.
  */
-// int save_to_eeprom(EEPROM &eeprom, int32_t pressure, float roll, float pitch, float yaw) {
-//     static int eeprom_memory_addr = 0x0000; // Static variable to track the current write position in EEPROM.
+// int save_to_eeprom(int32_t pressure, float roll, float pitch, float yaw) {
+//     // Static variable to track the current write position in EEPROM.
+//     static int eeprom_memory_addr = 0x0000; 
 
 //     // Check if adding another 10 bytes would exceed the EEPROM's addressable range.
-//     if (eeprom_memory_addr + 10 >= 0x10000) {
+//     if (this->eeprom_memory_addr + 10 >= 0x10000) {
+//         if (this->tictoc.read_ms()) {
+//             this->tictoc.stop();
+//             this->tictoc.reset();
+//             this->errnum = MEM_FULL;
+//         }
 //         return -1; // Return an error if there's not enough space left.
 //     }
+
+//     if (!this->ready() || this->tictoc.read_ms() < 10) {
+//         return -1;
+//     }
+//     this->tictoc.reset();
 
 //     // Split the 32-bit pressure value into two 16-bit parts.
 //     int16_t pressure_high_order = (pressure >> 16) & 0x0000FFFF;
@@ -749,18 +760,43 @@ void EEPROM_led_blink(int count, int interval_ms)
 //     wtb.word_array[3] = pitch_u16;
 //     wtb.word_array[4] = yaw_u16;
 
-//     // Write the byte array to EEPROM.
-//     eeprom.write_block_data(eeprom_memory_addr, wtb.byte_array, 10);
+//     // page write limitation
+//     const int PAGE_SIZE = 128;
+//     const int DATA_SIZE = 10;
+//     int write_size;
+
+//     if ((this->eeprom_memory_addr / PAGE_SIZE) != ((this->eeprom_memory_addr + DATA_SIZE - 1) / PAGE_SIZE)) {
+//         int first_data_size = PAGE_SIZE - (this->eeprom_memory_addr % PAGE_SIZE);
+//         int remain_size = DATA_SIZE - first_data_size;
+//         int first_ret = 0, second_ret = 0;
+//         first_ret = this->write_block_data(
+//                         this->eeprom_memory_addr,
+//                         wtb.byte_array,
+//                         first_data_size);
+
+//         int boundary = (this->eeprom_memory_addr / PAGE_SIZE + 1) * PAGE_SIZE;
+//         if (first_ret >= 0) {
+//             int loop_count = 0;
+//             // max time of write cycle is 5ms
+//             while ((second_ret = this->write_block_data(
+//                                             boundary,
+//                                             wtb.byte_array + first_data_size,
+//                                             remain_size)) < 0 
+//                 && loop_count++ <= 50) {
+//                 wait_us(100);
+//             }
+//         }
+//         write_size = second_ret < 0 ? first_ret : first_ret + second_ret;
+//     } else {
+//         write_size = this->write_block_data(this->eeprom_memory_addr, wtb.byte_array, 10);
+//     }
+
+//     pc.printf("Addr: %05d, pressure: (%5d, %5d), roll_16: %5d, pitch_16: %5d, yaw_16: %5d [ %2d ]\r\n", eeprom_memory_addr, pressure_high_order, pressure_low_order, roll_u16, pitch_u16, yaw_u16, write_size);
 
 //     // Increment the EEPROM memory address for the next write operation.
-//     eeprom_memory_addr += 10;
-
-//     // LED blink function to indicate write operation
-//     EEPROM_led_blink(1,10);
-
+//     this->eeprom_memory_addr += 10;
 //     return 0; // Return 0 to indicate successful operation.
 // }
-
 
 int main() {
     
@@ -780,13 +816,13 @@ int main() {
 
     // eeprom clear all contents on memory
     eeprom.save_to_eeprom(pc, 1, 2, 3, 4);
-    int status;
+    int status = eeprom.get_EEPROM_errnum();
     if (status == EEPROM::NORMAL) {
-        EEPROM_led_blink(5, 300);
+        EEPROM_led_blink(3, 300);
     } else if (status == EEPROM::NACK) {
-        EEPROM_led_blink(7, 300);
+        EEPROM_led_blink(1, 300);
     } else {
-        EEPROM_led_blink(10, 300);
+        EEPROM_led_blink(1, 300);
     }
 
     // EEPROM_led_blink(5,300);
@@ -849,12 +885,19 @@ int main() {
         }
     }
 
-    eeprom.init();
-    EEPROM_led_blink(5, 300);
+
 
     MCU_LED = 1;
     led_blink(5,200);
     wait_ms(500);
+
+    eeprom.init();
+    status = eeprom.get_EEPROM_errnum();
+    if (status == EEPROM::NORMAL)
+        EEPROM_led_blink(3, 300);
+    else 
+        EEPROM_led_blink(1, 300);
+
     //please keep controller at zero-state to check controller bias
 
 // pc.printf("phase 3"); // Bias check
@@ -953,13 +996,8 @@ int main() {
             //pc.printf("%d, %d, %f, %d, %f\n\r", timer2.read_ms(),pressure,press_out,temp,temp_out);
 
             // eeprom.save_to_eeprom(pc, timer2.read_ms(), angle_f[0], angle_f[1], angleY);
-            uint32_t dummy_time = dummy++;
-            uint32_t dummy_roll = dummy++;
-            uint32_t dummy_pitch = dummy++;
-            uint32_t dummy_yaw = dummy++;
 
-            eeprom.save_to_eeprom(pc, dummy_time, dummy_roll, dummy_pitch, dummy_yaw);
-            // eeprom.save_to_eeprom(pc, pressure, angle_f[0], angle_f[1], angleY);
+            eeprom.save_to_eeprom(pc, pressure, angle_f[0], angle_f[1], angleY);
 
             // pc.printf("time: %10d, roll: %5.2f, pitch: %5.2f, yaw: %5.2f\n\r", timer2.read_ms(),angle_f[0],angle_f[1],angleY);
             // pc.printf("%d,%.2f,%.2f,%.2f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f\n\r", timer2.read_ms(),angle_f[0],angle_f[1],angleY,ROLL,PITCH,YAW,controller_offset[0],controller_offset[1],controller_offset[2]);
